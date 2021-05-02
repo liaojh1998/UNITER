@@ -53,6 +53,27 @@ def process_nlvr2(jsonl, db, tokenizer, missing=None):
     return id2len, txt2img
 
 
+def process_vizwiz(jsonl, db, tokenizer):
+    id2len = {}
+    txt2img = {}
+    collection = json.load(jsonl)
+    for example in tqdm(collection, desc='processing VizWiz'):
+        id_ = example['image'].split('.')[0]
+        img_fname = f'{id_}.npz'
+        input_ids = tokenizer(example['question'])
+        if 'answerable' in example:
+            target = example['answerable']
+        else:
+            target = None
+        txt2img[id_] = img_fname
+        id2len[id_] = len(input_ids)
+        example['input_ids'] = input_ids
+        example['img_fname'] = img_fname
+        example['target'] = target
+        db[id_] = example
+    return id2len, txt2img
+
+
 def process_referring_expressions(refs, instances, iid_to_ann_ids,
                                   db, tokenizer, split):
     """
@@ -156,6 +177,9 @@ def main(opts):
             output_field_name = [
                 'id2len', 'images', 'annotations',
                 'categories', 'refs']
+        elif opts.task == 'vizwiz':
+            with open(opts.annotations[0]) as ann:
+                jsons = process_vizwiz(ann, db, tokenizer)
 
     for dump, name in zip(jsons, output_field_name):
         with open(f'{opts.output}/{name}.json', 'w') as f:
@@ -170,12 +194,12 @@ if __name__ == '__main__':
                         help='some training image features are corrupted')
     parser.add_argument('--output', required=True,
                         help='output dir of DB')
-    parser.add_argument('--task', required=True, default='nlvr',
-                        choices=['nlvr', 're'])
+    parser.add_argument('--task', required=True, default='vizwiz',
+                        choices=['vizwiz', 'nlvr', 're'])
     parser.add_argument('--toker', default='bert-base-cased',
                         help='which BERT tokenizer to used')
     args = parser.parse_args()
-    if args.task == 'nlvr':
+    if args.task == 'nlvr' or args.task == 'vizwiz':
         assert len(args.annotations) == 1
     elif args.task == 're':
         assert len(args.annotations) == 3
