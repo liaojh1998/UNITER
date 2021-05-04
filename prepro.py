@@ -59,7 +59,7 @@ def process_vizwiz(jsonl, db, tokenizer):
     collection = json.load(jsonl)
     for example in tqdm(collection, desc='processing VizWiz'):
         id_ = example['image'].split('.')[0]
-        img_fname = f'{id_}.npz'
+        img_fname = f'nlvr2_{id_}.npz'
         input_ids = tokenizer(example['question'])
         if 'answerable' in example:
             target = example['answerable']
