@@ -117,6 +117,7 @@ def main(opts):
     for txt_path, img_path in zip(opts.train_txt_dbs, opts.train_img_dbs):
         img_db = all_img_dbs[img_path]
         txt_db = TxtTokLmdb(txt_path, opts.max_txt_len)
+        # TODO: Dataset subset here somehow!
         train_datasets.append(UnansVqaDataset(txt_db, img_db))
     train_dataset = ConcatDatasetWithLens(train_datasets)
     train_dataloader = build_dataloader(train_dataset, unans_vqa_collate, True, opts)
@@ -344,7 +345,7 @@ def validate(model, val_loader, name="valid"):
     LOGGER.info(f"validation finished in {int(tot_time)} seconds")
     LOGGER.info(f"accuracy: {val_acc*100:.2f}%, {tot_score}/{n_ex}")
     LOGGER.info(f"ans accuracy: {good_ones*100/gold_ones:.2f}%, {good_ones}/{gold_ones}")
-    LOGGER.info(f"ans accuracy: {good_zeros*100/gold_zeros:.2f}%, {good_zeros}/{gold_zeros}")
+    LOGGER.info(f"unans accuracy: {good_zeros*100/gold_zeros:.2f}%, {good_zeros}/{gold_zeros}")
     return val_log, results
 
 
