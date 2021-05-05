@@ -8,6 +8,7 @@ from .data import (TxtTokLmdb, DetectFeatLmdb,
 from .sampler import TokenBucketSampler
 from .loader import PrefetchLoader, MetaLoader
 from .vqa import VqaDataset, VqaEvalDataset, vqa_collate, vqa_eval_collate
+from .unans import UnansVqaDataset, UnansVqaEvalDataset, unans_vqa_collate, unans_vqa_eval_collate
 from .ve import VeDataset, VeEvalDataset, ve_collate, ve_eval_collate
 from .nlvr2 import (Nlvr2PairedDataset, Nlvr2PairedEvalDataset,
                     Nlvr2TripletDataset, Nlvr2TripletEvalDataset,
