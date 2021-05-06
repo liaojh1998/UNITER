@@ -117,12 +117,18 @@ def main(opts):
     for txt_path, img_path in zip(opts.train_txt_dbs, opts.train_img_dbs):
         img_db = all_img_dbs[img_path]
         txt_db = TxtTokLmdb(txt_path, opts.max_txt_len)
-        # TODO: Dataset subset here somehow!
-        train_datasets.append(UnansVqaDataset(txt_db, img_db))
+        dataset = UnansVqaDataset(txt_db, img_db)
+        if args.train_subset < 1.0:
+            num = round(args.train_subset * len(dataset))
+            LOGGER.info(f"Using {num} of {len(dataset)} examples from '{txt_path}'")
+            indices = torch.randperm(len(dataset))[:num].numpy()
+            dataset.subset(indices)
+        train_datasets.append(dataset)
     train_dataset = ConcatDatasetWithLens(train_datasets)
+    LOGGER.info(f"Train dataset contains {len(train_dataset)} examples")
     train_dataloader = build_dataloader(train_dataset, unans_vqa_collate, True, opts)
     # val
-    LOGGER.info(f"Loading Train Dataset {opts.val_txt_db}, {opts.val_img_db}")
+    LOGGER.info(f"Loading Validation Dataset {opts.val_txt_db}, {opts.val_img_db}")
     val_img_db = all_img_dbs[opts.val_img_db]
     val_txt_db = TxtTokLmdb(opts.val_txt_db, -1)
     val_dataset = UnansVqaEvalDataset(val_txt_db, val_img_db)
@@ -175,6 +181,7 @@ def main(opts):
     LOGGER.info("***** Unanswerable VQA Configs *****")
     LOGGER.info("  unans_weight = %f", opts.unans_weight)
     LOGGER.info("  ans_threshold = %f", opts.ans_threshold)
+    LOGGER.info("  train_subset = %f", opts.train_subset)
 
     running_loss = RunningMeter('loss')
     model.train()
@@ -420,6 +427,9 @@ if __name__ == "__main__":
     parser.add_argument("--ans_threshold", default=0.5, type=float,
                         help="Threshold for an answer prediction"
                              "probability to be considered as answerable")
+    parser.add_argument("--train_subset", default=1.0, type=float,
+                        help="Percent of the training data to use to "
+                             "train the model")
 
     # device parameters
     parser.add_argument('--seed', type=int, default=42,

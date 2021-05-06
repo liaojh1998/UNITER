@@ -33,6 +33,10 @@ class UnansVqaDataset(DetectFeatTxtTokDataset):
 
         return qid, input_ids, img_feat, img_pos_feat, attn_masks, target
 
+    def subset(self, indices):
+        self.ids = [self.ids[idx] for idx in indices]
+        self.lens = [self.lens[idx] for idx in indices]
+
 
 def unans_vqa_collate(inputs):
     (qids, input_ids, img_feats, img_pos_feats, attn_masks, targets
