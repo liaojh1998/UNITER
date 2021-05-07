@@ -5,7 +5,7 @@
     "val_img_db": "/data/uniter/vizwiz/train/image",
     "checkpoint": "/data/uniter/pretrained/uniter-base.pt",
     "model_config": "/src/UNITER/config/uniter-base.json",
-    "output_dir": "/data/uniter/models/unans_vqa_base/",
+    "output_dir": "/data/uniter/models/unans_vqa_base_t1.0/",
     "max_txt_len": 60,
     "conf_th": 0.2,
     "max_bb": 100,

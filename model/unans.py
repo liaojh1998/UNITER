@@ -31,6 +31,11 @@ class UniterForUnansVisualQuestionAnswering(UniterPreTrainedModel):
         )
         self.apply(self.init_weights)
 
+    def classify_logits(self, logits):
+        answers = torch.sigmoid(logits) >= self.ans_threshold
+        answers = answers.long()
+        return answers
+
     def forward(self, batch, classify=False):
         batch = defaultdict(lambda: None, batch)
         input_ids = batch['input_ids']
@@ -56,8 +61,6 @@ class UniterForUnansVisualQuestionAnswering(UniterPreTrainedModel):
                 weight=weights.to(targets.device), reduction='none')
 
         if classify:
-            answers = torch.sigmoid(answer_scores) >= self.ans_threshold
-            answers = answers.long()
-            return unans_loss, answers
+            return unans_loss, self.classify_logits(answer_scores)
 
-        return unans_loss
+        return unans_loss, answer_scores

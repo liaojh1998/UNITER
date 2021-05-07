@@ -126,7 +126,12 @@ def main(opts):
         train_datasets.append(dataset)
     train_dataset = ConcatDatasetWithLens(train_datasets)
     LOGGER.info(f"Train dataset contains {len(train_dataset)} examples")
-    train_dataloader = build_dataloader(train_dataset, unans_vqa_collate, True, opts)
+    train_dataloader = None
+    if len(train_dataset) > 0:
+        train_dataloader = build_dataloader(train_dataset, unans_vqa_collate, True, opts)
+    else:
+        LOGGER.info(f"There's no training data, running validation on checkpoint instead")
+
     # val
     LOGGER.info(f"Loading Validation Dataset {opts.val_txt_db}, {opts.val_img_db}")
     val_img_db = all_img_dbs[opts.val_img_db]
@@ -150,7 +155,8 @@ def main(opts):
             toker, do_lower_case='uncased' in toker)
     model = UniterForUnansVisualQuestionAnswering.from_pretrained(
         opts.model_config, checkpoint,
-        img_dim=IMG_DIM, unans_weight=opts.unans_weight)
+        img_dim=IMG_DIM,
+        unans_weight=opts.unans_weight, ans_threshold=opts.ans_threshold)
     model.to(device)
     # make sure every process has same model parameters in the beginning
     broadcast_tensors([p.data for p in model.parameters()], 0)
@@ -164,7 +170,10 @@ def main(opts):
     if rank == 0:
         save_training_meta(opts)
         TB_LOGGER.create(join(opts.output_dir, 'log'))
-        pbar = tqdm(total=opts.num_train_steps)
+        if len(train_dataset) > 0:
+            pbar = tqdm(total=opts.num_train_steps)
+        else:
+            pbar = NoOp()
         model_saver = ModelSaver(join(opts.output_dir, 'ckpt'))
         os.makedirs(join(opts.output_dir, 'results'))  # store VQA predictions
         add_log_to_file(join(opts.output_dir, 'log', 'log.txt'))
@@ -191,98 +200,105 @@ def main(opts):
     # quick hack for amp delay_unscale bug
     optimizer.zero_grad()
     optimizer.step()
-    while True:
-        for step, batch in enumerate(train_dataloader):
-            n_examples += batch['input_ids'].size(0)
 
-            if opts.verbose:
-                LOGGER.info(f"***** Step {step} *****")
-                LOGGER.info(f"  Batch input_ids shape = {batch['input_ids'].shape}")
-                LOGGER.info(f"  Batch img_feat shape = {batch['img_feat'].shape}")
-                LOGGER.info(f"  Batch img_pos_feat shape = {batch['img_pos_feat'].shape}")
-                LOGGER.info(f"  Batch targets shape = {batch['targets'].shape}")
+    # training
+    if train_dataloader is not None:
+        while True:
+            for step, batch in enumerate(train_dataloader):
+                n_examples += batch['input_ids'].size(0)
 
-                ex_str = toker.convert_ids_to_tokens(batch['input_ids'][0].detach().cpu().numpy())
-                LOGGER.info(f"  Batch 1st example str = '{ex_str}'")
-                LOGGER.info(f"  Batch 1st example img = '{batch['img_feat'][0]}'")
-                LOGGER.info(f"  Batch 1st example img_pos = '{batch['img_pos_feat'][0]}'")
+                if opts.verbose:
+                    LOGGER.info(f"***** Step {step} *****")
+                    LOGGER.info(f"  Batch input_ids shape = {batch['input_ids'].shape}")
+                    LOGGER.info(f"  Batch img_feat shape = {batch['img_feat'].shape}")
+                    LOGGER.info(f"  Batch img_pos_feat shape = {batch['img_pos_feat'].shape}")
+                    LOGGER.info(f"  Batch targets shape = {batch['targets'].shape}")
 
-            loss = model(batch, classify=False)
-            loss = loss.mean() * batch['targets'].size(1)  # instance-leval bce
-            delay_unscale = (step+1) % opts.gradient_accumulation_steps != 0
-            with amp.scale_loss(loss, optimizer, delay_unscale=delay_unscale
-                                ) as scaled_loss:
-                scaled_loss.backward()
-                if not delay_unscale:
-                    # gather gradients from every processes
-                    # do this before unscaling to make sure every process uses
-                    # the same gradient scale
-                    grads = [p.grad.data for p in model.parameters()
-                             if p.requires_grad and p.grad is not None]
-                    all_reduce_and_rescale_tensors(grads, float(1))
+                    ex_str = toker.convert_ids_to_tokens(batch['input_ids'][0].detach().cpu().numpy())
+                    LOGGER.info(f"  Batch 1st example str = '{ex_str}'")
+                    LOGGER.info(f"  Batch 1st example img = '{batch['img_feat'][0]}'")
+                    LOGGER.info(f"  Batch 1st example img_pos = '{batch['img_pos_feat'][0]}'")
 
-            running_loss(loss.item())
+                loss, _ = model(batch, classify=False)
+                loss = loss.mean() * batch['targets'].size(1)  # instance-leval bce
+                delay_unscale = (step+1) % opts.gradient_accumulation_steps != 0
+                with amp.scale_loss(loss, optimizer, delay_unscale=delay_unscale
+                                    ) as scaled_loss:
+                    scaled_loss.backward()
+                    if not delay_unscale:
+                        # gather gradients from every processes
+                        # do this before unscaling to make sure every process uses
+                        # the same gradient scale
+                        grads = [p.grad.data for p in model.parameters()
+                                 if p.requires_grad and p.grad is not None]
+                        all_reduce_and_rescale_tensors(grads, float(1))
 
-            if (step + 1) % opts.gradient_accumulation_steps == 0:
-                global_step += 1
+                running_loss(loss.item())
 
-                # learning rate scheduling
-                lr_this_step = get_lr_sched(global_step, opts)
-                for i, param_group in enumerate(optimizer.param_groups):
-                    if i == 0 or i == 1:
-                        param_group['lr'] = lr_this_step * opts.lr_mul
-                    elif i == 2 or i == 3:
-                        param_group['lr'] = lr_this_step
-                    else:
-                        raise ValueError()
-                TB_LOGGER.add_scalar('lr', lr_this_step, global_step)
+                if (step + 1) % opts.gradient_accumulation_steps == 0:
+                    global_step += 1
 
-                # log loss
-                # NOTE: not gathered across GPUs for efficiency
-                TB_LOGGER.add_scalar('loss', running_loss.val, global_step)
-                TB_LOGGER.step()
+                    # learning rate scheduling
+                    lr_this_step = get_lr_sched(global_step, opts)
+                    for i, param_group in enumerate(optimizer.param_groups):
+                        if i == 0 or i == 1:
+                            param_group['lr'] = lr_this_step * opts.lr_mul
+                        elif i == 2 or i == 3:
+                            param_group['lr'] = lr_this_step
+                        else:
+                            raise ValueError()
+                    TB_LOGGER.add_scalar('lr', lr_this_step, global_step)
 
-                # update model params
-                if opts.grad_norm != -1:
-                    grad_norm = clip_grad_norm_(amp.master_params(optimizer),
-                                                opts.grad_norm)
-                    TB_LOGGER.add_scalar('grad_norm', grad_norm, global_step)
-                optimizer.step()
-                optimizer.zero_grad()
-                pbar.update(1)
+                    # log loss
+                    # NOTE: not gathered across GPUs for efficiency
+                    TB_LOGGER.add_scalar('loss', running_loss.val, global_step)
+                    TB_LOGGER.step()
 
-                if global_step % 100 == 0:
-                    # monitor training throughput
-                    LOGGER.info(f'============Step {global_step}=============')
-                    tot_ex = sum(all_gather_list(n_examples))
-                    ex_per_sec = int(tot_ex / (time()-start))
-                    LOGGER.info(f'{tot_ex} examples trained at '
-                                f'{ex_per_sec} ex/s')
-                    TB_LOGGER.add_scalar('perf/ex_per_s',
-                                         ex_per_sec, global_step)
-                    LOGGER.info(f'===========================================')
+                    # update model params
+                    if opts.grad_norm != -1:
+                        grad_norm = clip_grad_norm_(amp.master_params(optimizer),
+                                                    opts.grad_norm)
+                        TB_LOGGER.add_scalar('grad_norm', grad_norm, global_step)
+                    optimizer.step()
+                    optimizer.zero_grad()
+                    pbar.update(1)
 
-                if global_step % opts.valid_steps == 0:
-                    model_saver.save(model, global_step)
-                    val_log, results = validate(model, val_dataloader, "valid")
-                    with open(f'{opts.output_dir}/results/'
-                              f'val_results_{global_step}_'
-                              f'rank{rank}.json', 'w') as f:
-                        json.dump(results, f)
-                    TB_LOGGER.log_scaler_dict(val_log)
-                    train_log, results = validate(model, train_dataloader, "train")
-                    with open(f'{opts.output_dir}/results/'
-                              f'train_results_{global_step}_'
-                              f'rank{rank}.json', 'w') as f:
-                        json.dump(results, f)
-                    TB_LOGGER.log_scaler_dict(train_log)
+                    if global_step % 100 == 0:
+                        # monitor training throughput
+                        LOGGER.info(f'============Step {global_step}=============')
+                        tot_ex = sum(all_gather_list(n_examples))
+                        ex_per_sec = int(tot_ex / (time()-start))
+                        LOGGER.info(f'{tot_ex} examples trained at '
+                                    f'{ex_per_sec} ex/s')
+                        TB_LOGGER.add_scalar('perf/ex_per_s',
+                                             ex_per_sec, global_step)
+                        LOGGER.info(f'===========================================')
+
+                    if global_step % opts.save_steps == 0:
+                        model_saver.save(model, global_step)
+
+                    if global_step % opts.log_steps == 0:
+                        val_log, results = validate(model, val_dataloader, "valid")
+                        with open(f'{opts.output_dir}/results/'
+                                  f'val_results_{global_step}_'
+                                  f'rank{rank}.json', 'w') as f:
+                            json.dump(results, f)
+                        TB_LOGGER.log_scaler_dict(val_log)
+                        train_log, results = validate(model, train_dataloader, "train")
+                        with open(f'{opts.output_dir}/results/'
+                                  f'train_results_{global_step}_'
+                                  f'rank{rank}.json', 'w') as f:
+                            json.dump(results, f)
+                        TB_LOGGER.log_scaler_dict(train_log)
+                if global_step >= opts.num_train_steps:
+                    break
             if global_step >= opts.num_train_steps:
                 break
-        if global_step >= opts.num_train_steps:
-            break
-        n_epoch += 1
-        LOGGER.info(f"finished {n_epoch} epochs")
-    if opts.num_train_steps % opts.valid_steps != 0:
+            n_epoch += 1
+            LOGGER.info(f"finished {n_epoch} epochs")
+
+    # validation
+    if train_dataloader is None or opts.num_train_steps % opts.save_steps != 0:
         model_saver.save(model, global_step)
         val_log, results = validate(model, val_dataloader, "valid")
         with open(f'{opts.output_dir}/results/'
@@ -290,12 +306,13 @@ def main(opts):
                   f'rank{rank}.json', 'w') as f:
             json.dump(results, f)
         TB_LOGGER.log_scaler_dict(val_log)
-        train_log, results = validate(model, train_dataloader, "train")
-        with open(f'{opts.output_dir}/results/'
-                  f'train_results_{global_step}_'
-                  f'rank{rank}.json', 'w') as f:
-            json.dump(results, f)
-        TB_LOGGER.log_scaler_dict(train_log)
+        if train_dataloader is not None:
+            train_log, results = validate(model, train_dataloader, "train")
+            with open(f'{opts.output_dir}/results/'
+                      f'train_results_{global_step}_'
+                      f'rank{rank}.json', 'w') as f:
+                json.dump(results, f)
+            TB_LOGGER.log_scaler_dict(train_log)
 
 
 @torch.no_grad()
@@ -401,8 +418,10 @@ if __name__ == "__main__":
                         help="The initial learning rate for Adam.")
     parser.add_argument("--lr_mul", default=10.0, type=float,
                         help="multiplier for top layer lr")
-    parser.add_argument("--valid_steps", default=1000, type=int,
-                        help="Run validation every X steps")
+    parser.add_argument("--save_steps", default=1000, type=int,
+                        help="Run save every X steps")
+    parser.add_argument("--log_steps", default=500, type=int,
+                        help="Run logging every X steps")
     parser.add_argument("--num_train_steps", default=100000, type=int,
                         help="Total number of training updates to perform.")
     parser.add_argument("--optim", default='adam',
