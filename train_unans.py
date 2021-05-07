@@ -202,9 +202,11 @@ def main(opts):
     optimizer.step()
 
     # training
+    TB_LOGGER.step()
     if train_dataloader is not None:
+        step = 0
         while True:
-            for step, batch in enumerate(train_dataloader):
+            for batch in train_dataloader:
                 n_examples += batch['input_ids'].size(0)
 
                 if opts.verbose:
@@ -252,7 +254,6 @@ def main(opts):
                     # log loss
                     # NOTE: not gathered across GPUs for efficiency
                     TB_LOGGER.add_scalar('loss', running_loss.val, global_step)
-                    TB_LOGGER.step()
 
                     # update model params
                     if opts.grad_norm != -1:
@@ -290,8 +291,13 @@ def main(opts):
                                   f'rank{rank}.json', 'w') as f:
                             json.dump(results, f)
                         TB_LOGGER.log_scaler_dict(train_log)
+
+                    TB_LOGGER.step()
+
+                step += 1
                 if global_step >= opts.num_train_steps:
                     break
+
             if global_step >= opts.num_train_steps:
                 break
             n_epoch += 1

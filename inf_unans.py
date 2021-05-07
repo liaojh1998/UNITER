@@ -7,7 +7,7 @@ run inference of Unanswerable VQA for submission and validation
 import argparse
 import json
 import os
-from os.path import exists
+from os.path import exists, join
 from time import time
 
 import torch
@@ -38,18 +38,18 @@ def main(opts):
                 "16-bits training: {}".format(
                     device, n_gpu, hvd.rank(), opts.fp16))
 
-    hps_file = f'{opts.output_dir}/log/hps.json'
+    hps_file = join(f'{opts.output_dir}', 'log/hps.json')
     model_opts = Struct(json.load(open(hps_file)))
 
     # Prepare model
     if isinstance(opts.checkpoint, str) and exists(opts.checkpoint):
         ckpt_file = opts.checkpoint
     else:
-        ckpt_file = f'{opts.output_dir}/ckpt/model_step_{opts.checkpoint}.pt'
+        ckpt_file = join(f'{opts.output_dir}', f'ckpt/model_step_{opts.checkpoint}.pt')
     LOGGER.info(f"Loading '{ckpt_file}'")
     checkpoint = torch.load(ckpt_file)
     model = UniterForUnansVisualQuestionAnswering.from_pretrained(
-        f'{opts.output_dir}/log/model.json', checkpoint,
+        join(f'{opts.output_dir}', 'log/model.json'), checkpoint,
         img_dim=IMG_DIM,
         unans_weight=model_opts.unans_weight,
         ans_threshold=model_opts.ans_threshold)
@@ -77,7 +77,7 @@ def main(opts):
 
         val_log, results, logits = evaluate(model, eval_dataloader, name,
                                             opts.save_logits)
-        result_dir = f'{opts.output_dir}/results_test/{name}'
+        result_dir = join(f'{opts.output_dir}', f'results_test/{name}')
         if not exists(result_dir) and rank == 0:
             os.makedirs(result_dir)
 
@@ -87,14 +87,14 @@ def main(opts):
             for id2logit in all_gather_list(logits):
                 all_logits.update(id2logit)
         if hvd.rank() == 0:
-            with open(f'{result_dir}/'
-                      f'stats_{opts.checkpoint}_all.json', 'w') as f:
+            with open(join(f'{result_dir}',
+                      f'stats_{opts.checkpoint}_all.json'), 'w') as f:
                 json.dump(val_log, f)
-            with open(f'{result_dir}/'
-                      f'results_{opts.checkpoint}_all.json', 'w') as f:
+            with open(join(f'{result_dir}',
+                      f'results_{opts.checkpoint}_all.json'), 'w') as f:
                 json.dump(all_results, f, indent=4, sort_keys=True)
             if opts.save_logits:
-                np.savez(f'{result_dir}/logits_{opts.checkpoint}_all.npz',
+                np.savez(join(f'{result_dir}', f'logits_{opts.checkpoint}_all.npz'),
                          **all_logits)
 
 
