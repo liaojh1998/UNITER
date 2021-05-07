@@ -360,13 +360,16 @@ def validate(model, val_loader, name="valid"):
     tot_time = time()-st
     val_loss /= n_ex
     val_acc = tot_score / n_ex
+    val_ans_acc = good_ones / gold_ones
+    val_unans_acc = good_zeros / gold_zeros
     val_precis = good_ones / pred_ones
     val_recall = good_ones / gold_ones
     val_f1 = (2 * val_precis * val_recall) / (val_precis + val_recall)
     val_log = {f'{name}_eval/loss': val_loss,
                f'{name}_eval/accuracy': val_acc,
-               f'{name}_eval/ans_accuracy': good_ones / gold_ones,
-               f'{name}_eval/unans_accuracy': good_zeros / gold_zeros,
+               f'{name}_eval/ans_accuracy': val_ans_acc,
+               f'{name}_eval/unans_accuracy': val_unans_acc,
+               f'{name}_eval/balanced_accuracy': (val_ans_acc + val_unans_acc) / 2,
                f'{name}_eval/precision': val_precis,
                f'{name}_eval/recall': val_recall,
                f'{name}_eval/f1': val_f1,
@@ -374,8 +377,9 @@ def validate(model, val_loader, name="valid"):
     model.train()
     LOGGER.info(f"validation finished in {int(tot_time)} seconds")
     LOGGER.info(f"accuracy: {val_acc*100:.2f}%, {tot_score}/{n_ex}")
-    LOGGER.info(f"ans accuracy: {good_ones*100/gold_ones:.2f}%, {good_ones}/{gold_ones}")
-    LOGGER.info(f"unans accuracy: {good_zeros*100/gold_zeros:.2f}%, {good_zeros}/{gold_zeros}")
+    LOGGER.info(f"ans accuracy: {val_ans_acc*100:.2f}%, {good_ones}/{gold_ones}")
+    LOGGER.info(f"unans accuracy: {val_unans_acc*100:.2f}%, {good_zeros}/{gold_zeros}")
+    LOGGER.info(f"balanced accuracy: {(val_ans_acc + val_unans_acc)*100/2:.2f}%")
     return val_log, results
 
 
