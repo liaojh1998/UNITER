@@ -151,13 +151,16 @@ def evaluate(model, eval_loader, name, save_logits=False):
     if has_targets:
         val_loss /= n_ex
         val_acc = tot_scores / n_ex
+        val_ans_acc = good_ones / gold_ones
+        val_unans_acc = good_zeros / gold_zeros
         val_precis = good_ones / pred_ones
         val_recall = good_ones / gold_ones
         val_f1 = (2 * val_precis * val_recall) / (val_precis + val_recall)
         val_log[f'loss'] = val_loss
         val_log[f'accuracy'] = round(val_acc * 100, 4)
-        val_log[f'ans_accuracy'] = round(good_ones * 100 / gold_ones, 4)
-        val_log[f'unans_accuracy'] = round(good_zeros * 100 / gold_zeros, 4)
+        val_log[f'ans_accuracy'] = round(val_ans_acc * 100, 4)
+        val_log[f'unans_accuracy'] = round(val_unans_acc * 100, 4)
+        val_log[f'balanced_accuracy'] = round((val_ans_acc + val_unans_acc) * 100 / 2, 4)
         val_log[f'precision'] = round(val_precis, 6)
         val_log[f'recall'] = round(val_recall, 6)
         val_log[f'f1'] = round(val_f1, 6)
@@ -167,8 +170,9 @@ def evaluate(model, eval_loader, name, save_logits=False):
     if has_targets:
         LOGGER.info(f"  loss: {val_loss}")
         LOGGER.info(f"  accuracy: {val_acc*100:.4f}%, {tot_scores}/{n_ex}")
-        LOGGER.info(f"  ans accuracy: {good_ones*100/gold_ones:.4f}%, {good_ones}/{gold_ones}")
-        LOGGER.info(f"  unans accuracy: {good_zeros*100/gold_zeros:.4f}%, {good_zeros}/{gold_zeros}")
+        LOGGER.info(f"  ans accuracy: {val_ans_acc*100:.4f}%, {good_ones}/{gold_ones}")
+        LOGGER.info(f"  unans accuracy: {val_unans_acc*100:.4f}%, {good_zeros}/{gold_zeros}")
+        LOGGER.info(f"  balanced accuracy: {(val_ans_acc + val_unans_acc)*100/2:.4f}%")
         LOGGER.info(f"  precision: {val_precis:.6f}, {good_ones}/{pred_ones}")
         LOGGER.info(f"  recall: {val_recall:.6f}, {good_ones}/{gold_ones}")
         LOGGER.info(f"  f1: {val_f1:.6f}")
