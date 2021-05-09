@@ -74,6 +74,44 @@ def process_vizwiz(jsonl, db, tokenizer):
     return id2len, txt2img
 
 
+def process_qrpe(jsonl, name, db, tokenizer):
+    id2len = {}
+    txt2img = {}
+    collection = json.load(jsonl)
+    for example in tqdm(collection, desc='processing QRPE'):
+        id_ = str(example['qid'])
+        input_ids = tokenizer(example['q'])
+        for idx, tup in enumerate(example['tuplist']):
+            # Relevant
+            new_example_rel = {}
+            new_example_rel['qid'] = f'{id_}_rel{idx}'
+            new_example_rel['q'] = example['q']
+            new_example_rel['rel_tuple'] = tup['rel_tuple']
+            img_fname_rel = f'nlvr2_COCO_{name}2014_{tup["rel_imid"]:012}.npz'
+            target_rel = 1
+            txt2img[f'{id_}_rel{idx}'] = img_fname_rel
+            id2len[f'{id_}_rel{idx}'] = len(input_ids)
+            new_example_rel['input_ids'] = input_ids
+            new_example_rel['img_fname'] = img_fname_rel
+            new_example_rel['target'] = target_rel
+            db[f'{id_}_rel{idx}'] = new_example_rel
+
+            # Irrelevant
+            new_example_irr = {}
+            new_example_irr['qid'] = f'{id_}_irr{idx}'
+            new_example_irr['q'] = example['q']
+            new_example_irr['irr_tuple'] = tup['irr_tuple']
+            img_fname_irr = f'nlvr2_COCO_{name}2014_{tup["irr_imid"]:012}.npz'
+            target_irr = 0
+            txt2img[f'{id_}_irr{idx}'] = img_fname_irr
+            id2len[f'{id_}_irr{idx}'] = len(input_ids)
+            new_example_irr['input_ids'] = input_ids
+            new_example_irr['img_fname'] = img_fname_irr
+            new_example_irr['target'] = target_irr
+            db[f'{id_}_irr{idx}'] = new_example_irr
+    return id2len, txt2img
+
+
 def process_referring_expressions(refs, instances, iid_to_ann_ids,
                                   db, tokenizer, split):
     """
@@ -180,6 +218,9 @@ def main(opts):
         elif opts.task == 'vizwiz':
             with open(opts.annotations[0]) as ann:
                 jsons = process_vizwiz(ann, db, tokenizer)
+        elif opts.task == 'qrpe':
+            with open(opts.annotations[0]) as ann:
+                jsons = process_qrpe(ann, opts.name, db, tokenizer)
 
     for dump, name in zip(jsons, output_field_name):
         with open(f'{opts.output}/{name}.json', 'w') as f:
@@ -190,12 +231,14 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--annotations', required=True, nargs='+',
                         help='annotation JSON')
+    parser.add_argument('--name', default='train',
+                        help='name for file naming conventions')
     parser.add_argument('--missing_imgs',
                         help='some training image features are corrupted')
     parser.add_argument('--output', required=True,
                         help='output dir of DB')
     parser.add_argument('--task', required=True, default='vizwiz',
-                        choices=['vizwiz', 'nlvr', 're'])
+                        choices=['vizwiz', 'nlvr', 're', 'qrpe'])
     parser.add_argument('--toker', default='bert-base-cased',
                         help='which BERT tokenizer to used')
     args = parser.parse_args()
