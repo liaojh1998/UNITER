@@ -1,0 +1,13 @@
+{
+    "db_names": ["vizwiz"],
+    "txt_dbs": ["/data/uniter/vizwiz/val/text"],
+    "img_dbs": ["/data/uniter/vizwiz/val/image"],
+    "compressed_db": false,
+    "checkpoint": 6000,
+    "batch_size": 10240,
+    "output_dir": "/data/uniter/models/unans_vqa_base_t0.05/",
+    "save_logits": true,
+    "fp16": true,
+    "n_workers": 4,
+    "pin_mem": true
+}
