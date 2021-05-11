@@ -74,7 +74,7 @@ def process_vizwiz(jsonl, db, tokenizer):
     return id2len, txt2img
 
 
-def process_qrpe(jsonl, name, db, tokenizer):
+def process_qrpe(jsonl, db, tokenizer):
     id2len = {}
     txt2img = {}
     collection = json.load(jsonl)
@@ -87,7 +87,7 @@ def process_qrpe(jsonl, name, db, tokenizer):
             new_example_rel['qid'] = f'{id_}_rel{idx}'
             new_example_rel['q'] = example['q']
             new_example_rel['rel_tuple'] = tup['rel_tuple']
-            img_fname_rel = f'nlvr2_COCO_{name}2014_{tup["rel_imid"]:012}.npz'
+            img_fname_rel = f'{tup["rel_imid"]}.npz'
             target_rel = 1
             txt2img[f'{id_}_rel{idx}'] = img_fname_rel
             id2len[f'{id_}_rel{idx}'] = len(input_ids)
@@ -101,7 +101,7 @@ def process_qrpe(jsonl, name, db, tokenizer):
             new_example_irr['qid'] = f'{id_}_irr{idx}'
             new_example_irr['q'] = example['q']
             new_example_irr['irr_tuple'] = tup['irr_tuple']
-            img_fname_irr = f'nlvr2_COCO_{name}2014_{tup["irr_imid"]:012}.npz'
+            img_fname_irr = f'{tup["irr_imid"]}.npz'
             target_irr = 0
             txt2img[f'{id_}_irr{idx}'] = img_fname_irr
             id2len[f'{id_}_irr{idx}'] = len(input_ids)
@@ -220,7 +220,7 @@ def main(opts):
                 jsons = process_vizwiz(ann, db, tokenizer)
         elif opts.task == 'qrpe':
             with open(opts.annotations[0]) as ann:
-                jsons = process_qrpe(ann, opts.name, db, tokenizer)
+                jsons = process_qrpe(ann, db, tokenizer)
 
     for dump, name in zip(jsons, output_field_name):
         with open(f'{opts.output}/{name}.json', 'w') as f:
@@ -231,8 +231,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--annotations', required=True, nargs='+',
                         help='annotation JSON')
-    parser.add_argument('--name', default='train',
-                        help='name for file naming conventions')
     parser.add_argument('--missing_imgs',
                         help='some training image features are corrupted')
     parser.add_argument('--output', required=True,
