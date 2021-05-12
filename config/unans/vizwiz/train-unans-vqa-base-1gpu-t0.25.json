@@ -11,7 +11,7 @@
     "max_bb": 100,
     "min_bb": 10,
     "num_bb": 36,
-    "train_subset": 0.25,
+    "train_subset": [0.25],
     "train_batch_size": 5120,
     "val_batch_size": 10240,
     "gradient_accumulation_steps": 5,

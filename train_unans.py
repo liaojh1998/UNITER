@@ -114,12 +114,12 @@ def main(opts):
     LOGGER.info(f"Loading Train Dataset "
                 f"{opts.train_txt_dbs}, {opts.train_img_dbs}")
     train_datasets = []
-    for txt_path, img_path in zip(opts.train_txt_dbs, opts.train_img_dbs):
+    for txt_path, img_path, subset in zip(opts.train_txt_dbs, opts.train_img_dbs, opts.train_subset):
         img_db = all_img_dbs[img_path]
         txt_db = TxtTokLmdb(txt_path, opts.max_txt_len)
         dataset = UnansVqaDataset(txt_db, img_db)
-        if args.train_subset < 1.0:
-            num = round(args.train_subset * len(dataset))
+        if subset < 1.0:
+            num = round(subset * len(dataset))
             LOGGER.info(f"Using {num} of {len(dataset)} examples from '{txt_path}'")
             indices = torch.randperm(len(dataset))[:num].numpy()
             dataset.subset(indices)
@@ -190,7 +190,7 @@ def main(opts):
     LOGGER.info("***** Unanswerable VQA Configs *****")
     LOGGER.info("  unans_weight = %f", opts.unans_weight)
     LOGGER.info("  ans_threshold = %f", opts.ans_threshold)
-    LOGGER.info("  train_subset = %f", opts.train_subset)
+    LOGGER.info(f"  train_subset = {opts.train_subset}")
 
     running_loss = RunningMeter('loss')
     model.train()
@@ -456,7 +456,7 @@ if __name__ == "__main__":
     parser.add_argument("--ans_threshold", default=0.5, type=float,
                         help="Threshold for an answer prediction"
                              "probability to be considered as answerable")
-    parser.add_argument("--train_subset", default=1.0, type=float,
+    parser.add_argument("--train_subset", default=[1.0], type=list,
                         help="Percent of the training data to use to "
                              "train the model")
 
