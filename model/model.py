@@ -229,11 +229,15 @@ class UniterTextEmbeddings(nn.Module):
         self.LayerNorm = FusedLayerNorm(config.hidden_size, eps=1e-12)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
-    def forward(self, input_ids, position_ids, token_type_ids=None):
+    def forward(self, input_ids, position_ids, token_type_ids=None,
+                adv_training=False, adv_modality=[], adv_delta=0):
         if token_type_ids is None:
             token_type_ids = torch.zeros_like(input_ids)
 
         words_embeddings = self.word_embeddings(input_ids)
+        if adv_training == True and 'text' in adv_modality:
+            words_embeddings = words_embeddings + adv_delta
+
         position_embeddings = self.position_embeddings(position_ids)
         token_type_embeddings = self.token_type_embeddings(token_type_ids)
 
@@ -258,11 +262,15 @@ class UniterImageEmbeddings(nn.Module):
         self.LayerNorm = FusedLayerNorm(config.hidden_size, eps=1e-12)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
-    def forward(self, img_feat, img_pos_feat, type_embeddings, img_masks=None):
+    def forward(self, img_feat, img_pos_feat, type_embeddings, img_masks=None,
+                adv_training=False, adv_modality=[], adv_delta=0):
         if img_masks is not None:
             self.mask_embedding.weight.data[0, :].fill_(0)
             mask = self.mask_embedding(img_masks.long())
             img_feat = img_feat + mask
+
+        if adv_training == True and 'image' in adv_modality:
+            img_feat = img_feat + adv_delta
 
         transformed_im = self.img_layer_norm(self.img_linear(img_feat))
         transformed_pos = self.pos_layer_norm(self.pos_linear(img_pos_feat))
@@ -304,28 +312,36 @@ class UniterModel(UniterPreTrainedModel):
         self.apply(self.init_weights)
 
     def _compute_txt_embeddings(self, input_ids, position_ids,
-                                txt_type_ids=None):
-        output = self.embeddings(input_ids, position_ids, txt_type_ids)
+                                txt_type_ids=None,
+                                adv_training=False, adv_modality=[], adv_delta=0):
+        output = self.embeddings(input_ids, position_ids, txt_type_ids,
+                                 adv_training, adv_modality, adv_delta)
         return output
 
     def _compute_img_embeddings(self, img_feat, img_pos_feat, img_masks=None,
-                                img_type_ids=None):
+                                img_type_ids=None,
+                                adv_training=False, adv_modality=[], adv_delta=0):
         if img_type_ids is None:
             img_type_ids = torch.ones_like(img_feat[:, :, 0].long())
         img_type_embeddings = self.embeddings.token_type_embeddings(
             img_type_ids)
         output = self.img_embeddings(img_feat, img_pos_feat,
-                                     img_type_embeddings, img_masks)
+                                     img_type_embeddings, img_masks,
+                                     adv_training, adv_modality, adv_delta)
         return output
 
     def _compute_img_txt_embeddings(self, input_ids, position_ids,
                                     img_feat, img_pos_feat,
                                     gather_index, img_masks=None,
-                                    txt_type_ids=None, img_type_ids=None):
+                                    txt_type_ids=None, img_type_ids=None,
+                                    adv_training=False, adv_modality=[],
+                                    adv_delta_txt=0, adv_delta_img=0):
         txt_emb = self._compute_txt_embeddings(
-            input_ids, position_ids, txt_type_ids)
+            input_ids, position_ids, txt_type_ids,
+            adv_training, adv_modality, adv_delta_txt)
         img_emb = self._compute_img_embeddings(
-            img_feat, img_pos_feat, img_masks, img_type_ids)
+            img_feat, img_pos_feat, img_masks, img_type_ids,
+            adv_training, adv_modality, adv_delta_img)
         # align back to most compact input
         gather_index = gather_index.unsqueeze(-1).expand(
             -1, -1, self.config.hidden_size)
@@ -337,7 +353,9 @@ class UniterModel(UniterPreTrainedModel):
                 img_feat, img_pos_feat,
                 attention_mask, gather_index=None, img_masks=None,
                 output_all_encoded_layers=True,
-                txt_type_ids=None, img_type_ids=None):
+                txt_type_ids=None, img_type_ids=None,
+                adv_training=False, adv_modality=[],
+                adv_delta_txt=0, adv_delta_img=0):
         # compute self-attention mask
         extended_attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
         extended_attention_mask = extended_attention_mask.to(
@@ -348,16 +366,19 @@ class UniterModel(UniterPreTrainedModel):
         if input_ids is None:
             # image only
             embedding_output = self._compute_img_embeddings(
-                img_feat, img_pos_feat, img_masks, img_type_ids)
+                img_feat, img_pos_feat, img_masks, img_type_ids,
+                adv_training, adv_modality, adv_delta_img)
         elif img_feat is None:
             # text only
             embedding_output = self._compute_txt_embeddings(
-                input_ids, position_ids, txt_type_ids)
+                input_ids, position_ids, txt_type_ids,
+                adv_training, adv_modality, adv_delta_txt)
         else:
             embedding_output = self._compute_img_txt_embeddings(
                 input_ids, position_ids,
                 img_feat, img_pos_feat,
-                gather_index, img_masks, txt_type_ids, img_type_ids)
+                gather_index, img_masks, txt_type_ids, img_type_ids,
+                adv_training, adv_modality, adv_delta_txt, adv_delta_img)
 
         encoded_layers = self.encoder(
             embedding_output, extended_attention_mask,

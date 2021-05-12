@@ -31,6 +31,7 @@
     "warmup_steps": 500,
     "unans_weight": 3.5,
     "ans_threshold": 0.5,
+    "adv_training": false,
     "seed": 42,
     "fp16": true,
     "n_workers": 4,

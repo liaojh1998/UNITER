@@ -5,7 +5,7 @@
     "compressed_db": false,
     "checkpoint": 6000,
     "batch_size": 10240,
-    "output_dir": "/data/uniter/models/unans_vqa_sub_qrpe_t0.0/",
+    "output_dir": "/data/uniter/models/unans_vqa_sub_qrpe_t0.05_villa/",
     "save_logits": true,
     "fp16": true,
     "n_workers": 4,

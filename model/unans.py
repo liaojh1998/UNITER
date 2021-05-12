@@ -36,7 +36,9 @@ class UniterForUnansVisualQuestionAnswering(UniterPreTrainedModel):
         answers = answers.long()
         return answers
 
-    def forward(self, batch, classify=False):
+    def forward(self, batch, classify=False,
+                adv_training=False, adv_modality=[],
+                adv_delta_txt=0, adv_delta_img=0):
         batch = defaultdict(lambda: None, batch)
         input_ids = batch['input_ids']
         position_ids = batch['position_ids']
@@ -47,7 +49,11 @@ class UniterForUnansVisualQuestionAnswering(UniterPreTrainedModel):
         sequence_output = self.uniter(input_ids, position_ids,
                                       img_feat, img_pos_feat,
                                       attn_masks, gather_index,
-                                      output_all_encoded_layers=False)
+                                      output_all_encoded_layers=False,
+                                      adv_training=adv_training,
+                                      adv_modality=adv_modality,
+                                      adv_delta_txt=adv_delta_txt,
+                                      adv_delta_img=adv_delta_img)
         pooled_output = self.uniter.pooler(sequence_output)
         answer_scores = self.unans_output(pooled_output)
 
