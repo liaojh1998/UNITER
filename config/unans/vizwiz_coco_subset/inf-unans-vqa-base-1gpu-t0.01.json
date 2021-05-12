@@ -1,0 +1,13 @@
+{
+    "db_names": ["vizwiz", "coco"],
+    "txt_dbs": ["/data/uniter/vizwiz/val/text", "/data/uniter/coco/val/text"],
+    "img_dbs": ["/data/uniter/vizwiz/val/image", "/data/uniter/qrpe/val/image"],
+    "compressed_db": false,
+    "checkpoint": 6000,
+    "batch_size": 10240,
+    "output_dir": "/data/uniter/models/unans_vqa_sub_coco_t0.01/",
+    "save_logits": true,
+    "fp16": true,
+    "n_workers": 4,
+    "pin_mem": true
+}

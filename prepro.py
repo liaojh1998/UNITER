@@ -53,6 +53,28 @@ def process_nlvr2(jsonl, db, tokenizer, missing=None):
     return id2len, txt2img
 
 
+def process_coco(jsonl, db, tokenizer):
+    id2len = {}
+    txt2img = {}
+    collection = json.load(jsonl)
+    for example in tqdm(collection['questions'], desc='processing COCO'):
+        id_ = str(example['question_id'])
+        img_fname = f'{example["image_id"]}.npz'
+        input_ids = tokenizer(example['question'])
+        if 'answerable' in example:
+            target = example['answerable']
+        else:
+            target = None
+        txt2img[id_] = img_fname
+        id2len[id_] = len(input_ids)
+        example['qid'] = id_
+        example['input_ids'] = input_ids
+        example['img_fname'] = img_fname
+        example['target'] = target
+        db[id_] = example
+    return id2len, txt2img
+
+
 def process_vizwiz(jsonl, db, tokenizer):
     id2len = {}
     txt2img = {}
@@ -221,6 +243,9 @@ def main(opts):
         elif opts.task == 'qrpe':
             with open(opts.annotations[0]) as ann:
                 jsons = process_qrpe(ann, db, tokenizer)
+        elif opts.task == 'coco':
+            with open(opts.annotations[0]) as ann:
+                jsons = process_coco(ann, db, tokenizer)
 
     for dump, name in zip(jsons, output_field_name):
         with open(f'{opts.output}/{name}.json', 'w') as f:
@@ -236,7 +261,7 @@ if __name__ == '__main__':
     parser.add_argument('--output', required=True,
                         help='output dir of DB')
     parser.add_argument('--task', required=True, default='vizwiz',
-                        choices=['vizwiz', 'nlvr', 're', 'qrpe'])
+                        choices=['vizwiz', 'nlvr', 're', 'qrpe', 'coco'])
     parser.add_argument('--toker', default='bert-base-cased',
                         help='which BERT tokenizer to used')
     args = parser.parse_args()
