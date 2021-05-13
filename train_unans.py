@@ -195,9 +195,11 @@ def main(opts):
         LOGGER.info("***** VILLA Training Configs *****")
         LOGGER.info(f"  adv_training = {opts.adv_training}")
         LOGGER.info(f"  adv_modality = {opts.adv_modality}")
+        LOGGER.info(f"  adv_delta_update = {opts.adv_delta_update}")
         LOGGER.info("  adv_lr_txt = %f", opts.adv_lr_txt)
         LOGGER.info("  adv_lr_img = %f", opts.adv_lr_img)
-        LOGGER.info("  adv_steps = %d", opts.adv_steps)
+        if opts.adv_delta_update:
+            LOGGER.info("  adv_steps = %d", opts.adv_steps)
         LOGGER.info(f"  norm_type = {opts.norm_type}")
         LOGGER.info("  adv_max_norm = %f", opts.adv_max_norm)
         LOGGER.info("  adv_kl_weight = %f", opts.adv_kl_weight)
@@ -235,33 +237,168 @@ def main(opts):
                 # Copied and modified from https://github.com/zhegan27/VILLA
 
                 if opts.adv_training:
-                    # initialize delta
-                    txt_embeds_init = model.uniter.embeddings.word_embeddings(
-                        batch['input_ids'])
-                    img_embeds_init = batch['img_feat']
+                    # with delta updates
+                    if opts.adv_delta_update:
+                        # initialize delta
+                        txt_embeds_init = model.uniter.embeddings.word_embeddings(
+                            batch['input_ids'])
+                        img_embeds_init = batch['img_feat']
 
-                    # for simplicity, we initialize the delta as zero vectors, which performs
-                    # very simliar as initializing randomly using norm or uniform distributions
-                    txt_delta = torch.zeros_like(txt_embeds_init)
-                    img_delta = torch.zeros_like(img_embeds_init)
+                        # for simplicity, we initialize the delta as zero vectors, which performs
+                        # very simliar as initializing randomly using norm or uniform distributions
+                        txt_delta = torch.zeros_like(txt_embeds_init)
+                        img_delta = torch.zeros_like(img_embeds_init)
 
-                    # calculate the prob. scores for clean samples
-                    _, gt_answer_scores = model(batch, classify=False)
-                    gt_answer_prob = F.sigmoid(gt_answer_scores)
-                    gt_answer_logprob = F.logsigmoid(gt_answer_scores)
+                        # calculate the prob. scores for clean samples
+                        _, gt_answer_scores = model(batch, classify=False)
+                        gt_answer_prob = F.sigmoid(gt_answer_scores)
+                        gt_answer_logprob = F.logsigmoid(gt_answer_scores)
 
-                    # the main loop
-                    for astep in range(opts.adv_steps):
-                        # (0) forward
+                        # the main loop
+                        for astep in range(opts.adv_steps):
+                            # (0) forward
+                            if opts.adv_modality == ["text"]:
+                                txt_delta.requires_grad_()
+                                img_delta = torch.zeros_like(img_embeds_init)
+                            elif opts.adv_modality == ["image"]:
+                                img_delta.requires_grad_()
+                                txt_delta = torch.zeros_like(txt_embeds_init)
+                            else:
+                                txt_delta.requires_grad_()
+                                img_delta.requires_grad_()
+
+                            if "alter" not in opts.adv_modality:
+                                bce_loss, answer_scores = model(batch, classify=False, adv_training=True,
+                                    adv_modality=opts.adv_modality,
+                                    adv_delta_txt=txt_delta,
+                                    adv_delta_img=img_delta)
+                                bce_loss = bce_loss.mean() * batch['targets'].size(1)
+
+                                # KL loss
+                                answer_prob = F.sigmoid(answer_scores)
+                                answer_logprob = F.logsigmoid(answer_scores)
+                                kl_loss = F.kl_div(answer_logprob, gt_answer_prob, reduction='none') + \
+                                            F.kl_div(gt_answer_logprob, answer_prob, reduction='none')
+                                kl_loss = kl_loss.mean() * batch['targets'].size(1)   # instance-leval bce
+
+                                # (1) backward
+                                loss = (bce_loss + opts.adv_kl_weight * kl_loss) / opts.adv_steps
+                            else:
+                                bce_loss_1, answer_scores_1 = model(batch, classify=False, adv_training=True,
+                                    adv_modality=["text"],
+                                    adv_delta_txt=txt_delta,
+                                    adv_delta_img=None)
+                                bce_loss_1 = bce_loss_1.mean() * batch['targets'].size(1)
+
+                                bce_loss_2, answer_scores_2 = model(batch, classify=False, adv_training=True,
+                                    adv_modality=["image"],
+                                    adv_delta_txt=None,
+                                    adv_delta_img=img_delta)
+                                bce_loss_2 = bce_loss_2.mean() * batch['targets'].size(1)
+
+                                # KL loss
+                                answer_prob_1 = F.sigmoid(answer_scores_1)
+                                answer_logprob_1 = F.logsigmoid(answer_scores_1)
+                                answer_prob_2 = F.sigmoid(answer_scores_2)
+                                answer_logprob_2 = F.logsigmoid(answer_scores_2)
+
+                                kl_loss_1 = F.kl_div(answer_logprob_1,gt_answer_prob,reduction='none') + \
+                                            F.kl_div(gt_answer_logprob,answer_prob_1,reduction='none')
+                                kl_loss_1 = kl_loss_1.mean() * batch['targets'].size(1)   # instance-leval bce
+
+                                kl_loss_2 = F.kl_div(answer_logprob_2,gt_answer_prob,reduction='none') + \
+                                            F.kl_div(gt_answer_logprob,answer_prob_2,reduction='none')
+                                kl_loss_2 = kl_loss_2.mean() * batch['targets'].size(1)   # instance-leval bce
+
+                                # (1) backward
+                                loss = (bce_loss_1 + bce_loss_2 + opts.adv_kl_weight * (kl_loss_1+kl_loss_2)) / (opts.adv_steps*2)
+
+                            delay_unscale = ((step+1) % opts.gradient_accumulation_steps != 0) or ((astep+1) % opts.adv_steps != 0)
+                            with amp.scale_loss(loss, optimizer, delay_unscale=delay_unscale
+                                                ) as scaled_loss:
+                                scaled_loss.backward(retain_graph=True)
+                                if not delay_unscale:
+                                    # gather gradients from every processes
+                                    # do this before unscaling to make sure every process uses
+                                    # the same gradient scale
+                                    grads = [p.grad.data for p in model.parameters()
+                                             if p.requires_grad and p.grad is not None]
+                                    all_reduce_and_rescale_tensors(grads, float(1))
+
+                            running_loss(loss.item())
+
+                            # further updates on delta
+                            if astep < opts.adv_steps - 1:
+                                # (2) get gradient on delta
+                                # fix fp16 problem
+                                amp_scale = scaled_loss.item() // loss.item()
+                                if "text" in opts.adv_modality:
+                                    txt_delta_grad = txt_delta.grad.clone().detach().float() / amp_scale
+                                if "image" in opts.adv_modality:
+                                    img_delta_grad = img_delta.grad.clone().detach().float() / amp_scale
+
+                                # (3) update and clip for txt delta
+                                if "text" in opts.adv_modality:
+                                    if opts.norm_type == "l2":
+                                        denorm = torch.norm(txt_delta_grad.view(txt_delta_grad.size(0), -1), dim=1).view(-1, 1, 1)
+                                        denorm = torch.clamp(denorm, min=1e-8)
+                                        txt_delta_step = (opts.adv_lr_txt * txt_delta_grad / denorm).to(txt_delta)
+                                        txt_delta = (txt_delta + txt_delta_step).detach()
+                                        if opts.adv_max_norm > 0:
+                                            delta_norm = torch.norm(txt_delta.view(txt_delta.size(0), -1), p=2, dim=1).detach()
+                                            exceed_mask = (delta_norm > opts.adv_max_norm).to(txt_embeds_init)
+                                            reweights = (opts.adv_max_norm / delta_norm * exceed_mask + (1-exceed_mask)).view(-1, 1, 1)
+                                            txt_delta = (txt_delta * reweights).detach()
+                                    elif opts.norm_type == "linf":
+                                        denorm = torch.norm(txt_delta_grad.view(txt_delta_grad.size(0), -1), dim=1, p=float("inf")).view(-1, 1, 1)
+                                        denorm = torch.clamp(denorm, min=1e-8)
+                                        txt_delta_step = (opts.adv_lr_txt * txt_delta_grad / denorm).to(txt_delta)
+                                        txt_delta = (txt_delta + txt_delta_step).detach()
+                                        if opts.adv_max_norm > 0:
+                                            txt_delta = torch.clamp(txt_delta, -opts.adv_max_norm, opts.adv_max_norm).detach()
+
+                                # (4) update and clip for image delta
+                                if "image" in opts.adv_modality:
+                                    if opts.norm_type == "l2":
+                                        denorm = torch.norm(img_delta_grad.view(img_delta_grad.size(0), -1), dim=1).view(-1, 1, 1)
+                                        denorm = torch.clamp(denorm, min=1e-8)
+                                        img_delta_step = (opts.adv_lr_img * img_delta_grad / denorm).to(img_delta)
+                                        img_delta = (img_delta + img_delta_step).detach()
+                                        if opts.adv_max_norm > 0:
+                                            delta_norm = torch.norm(img_delta.view(img_delta.size(0), -1), p=2, dim=1).detach()
+                                            exceed_mask = (delta_norm > opts.adv_max_norm).to(img_embeds_init)
+                                            reweights = (opts.adv_max_norm / delta_norm * exceed_mask + (1-exceed_mask)).view(-1, 1, 1)
+                                            img_delta = (img_delta * reweights).detach()
+                                    elif opts.norm_type == "linf":
+                                        denorm = torch.norm(img_delta_grad.view(img_delta_grad.size(0), -1), dim=1, p=float("inf")).view(-1, 1, 1)
+                                        denorm = torch.clamp(denorm, min=1e-8)
+                                        img_delta_step = (opts.adv_lr_img * img_delta_grad / denorm).to(img_delta)
+                                        img_delta = (img_delta + img_delta_step).detach()
+                                        if opts.adv_max_norm > 0:
+                                            img_delta = torch.clamp(img_delta, -opts.adv_max_norm, opts.adv_max_norm).detach()
+
+                    # no delta update
+                    else:
+                        txt_embeds_init = model.uniter.embeddings.word_embeddings(
+                            batch['input_ids'])
+                        img_embeds_init = batch['img_feat']
+
+                        # for simplicity, we initialize the delta as zero vectors, which performs
+                        # very simliar as initializing randomly using norm or uniform distributions
+                        txt_delta = torch.zeros_like(txt_embeds_init)
+                        img_delta = torch.zeros_like(img_embeds_init)
+
+                        # calculate the prob. scores for clean samples
+                        _, gt_answer_scores = model(batch, classify=False)
+                        gt_answer_prob = F.sigmoid(gt_answer_scores)
+                        gt_answer_logprob = F.logsigmoid(gt_answer_scores)
+
                         if opts.adv_modality == ["text"]:
-                            txt_delta.requires_grad_()
-                            img_delta = torch.zeros_like(img_embeds_init)
+                            nn.init.uniform_(txt_delta, a=-opts.adv_lr_txt, b=opts.adv_lr_txt)
+                            txt_delta /= sqrt(txt_delta.shape[-1])
                         elif opts.adv_modality == ["image"]:
-                            img_delta.requires_grad_()
-                            txt_delta = torch.zeros_like(txt_embeds_init)
-                        else:
-                            txt_delta.requires_grad_()
-                            img_delta.requires_grad_()
+                            nn.init.uniform_(img_delta, a=-opts.adv_lr_img, b=opts.adv_lr_img)
+                            img_delta /= sqrt(img_delta.shape[-1])
 
                         if "alter" not in opts.adv_modality:
                             bce_loss, answer_scores = model(batch, classify=False, adv_training=True,
@@ -278,7 +415,7 @@ def main(opts):
                             kl_loss = kl_loss.mean() * batch['targets'].size(1)   # instance-leval bce
 
                             # (1) backward
-                            loss = (bce_loss + opts.adv_kl_weight * kl_loss) / opts.adv_steps
+                            loss = bce_loss + opts.adv_kl_weight * kl_loss
                         else:
                             bce_loss_1, answer_scores_1 = model(batch, classify=False, adv_training=True,
                                 adv_modality=["text"],
@@ -307,12 +444,12 @@ def main(opts):
                             kl_loss_2 = kl_loss_2.mean() * batch['targets'].size(1)   # instance-leval bce
 
                             # (1) backward
-                            loss = (bce_loss_1 + bce_loss_2 + opts.adv_kl_weight * (kl_loss_1+kl_loss_2)) / (opts.adv_steps*2)
+                            loss = bce_loss_1 + bce_loss_2 + opts.adv_kl_weight * (kl_loss_1+kl_loss_2)
 
-                        delay_unscale = ((step+1) % opts.gradient_accumulation_steps != 0) or ((astep+1) % opts.adv_steps != 0)
+                        delay_unscale = (step+1) % opts.gradient_accumulation_steps != 0
                         with amp.scale_loss(loss, optimizer, delay_unscale=delay_unscale
                                             ) as scaled_loss:
-                            scaled_loss.backward(retain_graph=True)
+                            scaled_loss.backward()
                             if not delay_unscale:
                                 # gather gradients from every processes
                                 # do this before unscaling to make sure every process uses
@@ -323,58 +460,7 @@ def main(opts):
 
                         running_loss(loss.item())
 
-                        if astep == opts.adv_steps - 1:
-                            # further updates on delta
-                            break
-
-                        # (2) get gradient on delta
-                        # fix fp16 problem
-                        amp_scale = scaled_loss.item() // loss.item()
-                        if "text" in opts.adv_modality:
-                            txt_delta_grad = txt_delta.grad.clone().detach().float() / amp_scale
-                        if "image" in opts.adv_modality:
-                            img_delta_grad = img_delta.grad.clone().detach().float() / amp_scale
-
-                        # (3) update and clip for txt delta
-                        if "text" in opts.adv_modality:
-                            if opts.norm_type == "l2":
-                                denorm = torch.norm(txt_delta_grad.view(txt_delta_grad.size(0), -1), dim=1).view(-1, 1, 1)
-                                denorm = torch.clamp(denorm, min=1e-8)
-                                txt_delta_step = (opts.adv_lr_txt * txt_delta_grad / denorm).to(txt_delta)
-                                txt_delta = (txt_delta + txt_delta_step).detach()
-                                if opts.adv_max_norm > 0:
-                                    delta_norm = torch.norm(txt_delta.view(txt_delta.size(0), -1), p=2, dim=1).detach()
-                                    exceed_mask = (delta_norm > opts.adv_max_norm).to(txt_embeds_init)
-                                    reweights = (opts.adv_max_norm / delta_norm * exceed_mask + (1-exceed_mask)).view(-1, 1, 1)
-                                    txt_delta = (txt_delta * reweights).detach()
-                            elif opts.norm_type == "linf":
-                                denorm = torch.norm(txt_delta_grad.view(txt_delta_grad.size(0), -1), dim=1, p=float("inf")).view(-1, 1, 1)
-                                denorm = torch.clamp(denorm, min=1e-8)
-                                txt_delta_step = (opts.adv_lr_txt * txt_delta_grad / denorm).to(txt_delta)
-                                txt_delta = (txt_delta + txt_delta_step).detach()
-                                if opts.adv_max_norm > 0:
-                                    txt_delta = torch.clamp(txt_delta, -opts.adv_max_norm, opts.adv_max_norm).detach()
-
-                        # (4) update and clip for image delta
-                        if "image" in opts.adv_modality:
-                            if opts.norm_type == "l2":
-                                denorm = torch.norm(img_delta_grad.view(img_delta_grad.size(0), -1), dim=1).view(-1, 1, 1)
-                                denorm = torch.clamp(denorm, min=1e-8)
-                                img_delta_step = (opts.adv_lr_img * img_delta_grad / denorm).to(img_delta)
-                                img_delta = (img_delta + img_delta_step).detach()
-                                if opts.adv_max_norm > 0:
-                                    delta_norm = torch.norm(img_delta.view(img_delta.size(0), -1), p=2, dim=1).detach()
-                                    exceed_mask = (delta_norm > opts.adv_max_norm).to(img_embeds_init)
-                                    reweights = (opts.adv_max_norm / delta_norm * exceed_mask + (1-exceed_mask)).view(-1, 1, 1)
-                                    img_delta = (img_delta * reweights).detach()
-                            elif opts.norm_type == "linf":
-                                denorm = torch.norm(img_delta_grad.view(img_delta_grad.size(0), -1), dim=1, p=float("inf")).view(-1, 1, 1)
-                                denorm = torch.clamp(denorm, min=1e-8)
-                                img_delta_step = (opts.adv_lr_img * img_delta_grad / denorm).to(img_delta)
-                                img_delta = (img_delta + img_delta_step).detach()
-                                if opts.adv_max_norm > 0:
-                                    img_delta = torch.clamp(img_delta, -opts.adv_max_norm, opts.adv_max_norm).detach()
-
+                # normal training
                 else:
                     loss, _ = model(batch, classify=False)
                     loss = loss.mean() * batch['targets'].size(1)  # instance-leval bce
