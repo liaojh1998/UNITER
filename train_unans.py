@@ -13,6 +13,7 @@ from os.path import abspath, dirname, exists, join
 from time import time
 
 import torch
+import torch.nn as nn
 from torch.nn import functional as F
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader
@@ -393,10 +394,10 @@ def main(opts):
                         gt_answer_prob = F.sigmoid(gt_answer_scores)
                         gt_answer_logprob = F.logsigmoid(gt_answer_scores)
 
-                        if opts.adv_modality == ["text"]:
+                        if "text" in opts.adv_modality:
                             nn.init.uniform_(txt_delta, a=-opts.adv_lr_txt, b=opts.adv_lr_txt)
                             txt_delta /= sqrt(txt_delta.shape[-1])
-                        elif opts.adv_modality == ["image"]:
+                        if "image" in opts.adv_modality:
                             nn.init.uniform_(img_delta, a=-opts.adv_lr_img, b=opts.adv_lr_img)
                             img_delta /= sqrt(img_delta.shape[-1])
 
@@ -417,34 +418,40 @@ def main(opts):
                             # (1) backward
                             loss = bce_loss + opts.adv_kl_weight * kl_loss
                         else:
-                            bce_loss_1, answer_scores_1 = model(batch, classify=False, adv_training=True,
-                                adv_modality=["text"],
-                                adv_delta_txt=txt_delta,
-                                adv_delta_img=None)
-                            bce_loss_1 = bce_loss_1.mean() * batch['targets'].size(1)
+                            if (step+1) % 2 == 1:
+                                bce_loss_1, answer_scores_1 = model(batch, classify=False, adv_training=True,
+                                    adv_modality=["text"],
+                                    adv_delta_txt=txt_delta,
+                                    adv_delta_img=None)
+                                bce_loss_1 = bce_loss_1.mean() * batch['targets'].size(1)
 
-                            bce_loss_2, answer_scores_2 = model(batch, classify=False, adv_training=True,
-                                adv_modality=["image"],
-                                adv_delta_txt=None,
-                                adv_delta_img=img_delta)
-                            bce_loss_2 = bce_loss_2.mean() * batch['targets'].size(1)
+                                # KL loss
+                                answer_prob_1 = F.sigmoid(answer_scores_1)
+                                answer_logprob_1 = F.logsigmoid(answer_scores_1)
 
-                            # KL loss
-                            answer_prob_1 = F.sigmoid(answer_scores_1)
-                            answer_logprob_1 = F.logsigmoid(answer_scores_1)
-                            answer_prob_2 = F.sigmoid(answer_scores_2)
-                            answer_logprob_2 = F.logsigmoid(answer_scores_2)
+                                kl_loss_1 = F.kl_div(answer_logprob_1,gt_answer_prob,reduction='none') + \
+                                            F.kl_div(gt_answer_logprob,answer_prob_1,reduction='none')
+                                kl_loss_1 = kl_loss_1.mean() * batch['targets'].size(1)   # instance-leval bce
 
-                            kl_loss_1 = F.kl_div(answer_logprob_1,gt_answer_prob,reduction='none') + \
-                                        F.kl_div(gt_answer_logprob,answer_prob_1,reduction='none')
-                            kl_loss_1 = kl_loss_1.mean() * batch['targets'].size(1)   # instance-leval bce
+                                # (1) backward
+                                loss = bce_loss_1 + opts.adv_kl_weight * kl_loss_1
+                            else:
+                                bce_loss_2, answer_scores_2 = model(batch, classify=False, adv_training=True,
+                                    adv_modality=["image"],
+                                    adv_delta_txt=None,
+                                    adv_delta_img=img_delta)
+                                bce_loss_2 = bce_loss_2.mean() * batch['targets'].size(1)
 
-                            kl_loss_2 = F.kl_div(answer_logprob_2,gt_answer_prob,reduction='none') + \
-                                        F.kl_div(gt_answer_logprob,answer_prob_2,reduction='none')
-                            kl_loss_2 = kl_loss_2.mean() * batch['targets'].size(1)   # instance-leval bce
+                                # KL loss
+                                answer_prob_2 = F.sigmoid(answer_scores_2)
+                                answer_logprob_2 = F.logsigmoid(answer_scores_2)
 
-                            # (1) backward
-                            loss = bce_loss_1 + bce_loss_2 + opts.adv_kl_weight * (kl_loss_1+kl_loss_2)
+                                kl_loss_2 = F.kl_div(answer_logprob_2,gt_answer_prob,reduction='none') + \
+                                            F.kl_div(gt_answer_logprob,answer_prob_2,reduction='none')
+                                kl_loss_2 = kl_loss_2.mean() * batch['targets'].size(1)   # instance-leval bce
+
+                                # (1) backward
+                                loss = bce_loss_2 + opts.adv_kl_weight * kl_loss_2
 
                         delay_unscale = (step+1) % opts.gradient_accumulation_steps != 0
                         with amp.scale_loss(loss, optimizer, delay_unscale=delay_unscale
